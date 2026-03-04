@@ -37,23 +37,56 @@ Visit http://localhost:8080 to verify the health check endpoint.
 
 ## Step 3: Deploy to Cloud Run
 
-### Option A: Deploy with gcloud (Recommended)
+You have two options for deployment: using command-line flags or using a `service.yaml` configuration file.
+
+### Option A: Deploy with service.yaml (Recommended for Production)
+
+The `service.yaml` file in the project root contains all service configuration. Before deploying:
+
+1. Update `service.yaml` with your project details:
+   - Replace `PROJECT_ID` with your GCP project ID
+   - Replace `PROJECT_NUMBER` with your GCP project number
+   - Update `FRONTEND_URL` after frontend deployment
+
+2. Build and push the Docker image:
+
+```bash
+# Enable required APIs
+gcloud services enable containerregistry.googleapis.com run.googleapis.com
+
+# Configure Docker to use gcloud
+gcloud auth configure-docker
+
+# Build and tag
+docker build -t gcr.io/YOUR_PROJECT_ID/simeg-order-entry-backend:latest .
+
+# Push to GCR
+docker push gcr.io/YOUR_PROJECT_ID/simeg-order-entry-backend:latest
+```
+
+3. Deploy using the service.yaml:
+
+```bash
+gcloud run services replace service.yaml --region us-central1
+```
+
+### Option B: Deploy with gcloud CLI flags
+
+Deploy directly from source code:
 
 ```bash
 gcloud run deploy simeg-order-entry-backend \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars ENVIRONMENT=production \
-  --set-secrets GEMINI_API_KEY=GEMINI_API_KEY:latest \
+  --set-env-vars ENVIRONMENT=production,FRONTEND_URL=* \
+  --set-secrets GEMINI_API_KEY=simeg-prototype-gemini-api-key:latest \
   --memory 1Gi \
   --cpu 1 \
   --max-instances 10
 ```
 
-Note: This assumes you've stored your `GEMINI_API_KEY` in Google Secret Manager.
-
-### Option B: Deploy with Docker Image
+### Option C: Deploy with Docker Image
 
 1. Build and push to Google Container Registry:
 
@@ -75,39 +108,30 @@ gcloud run deploy simeg-order-entry-backend \
   --image gcr.io/YOUR_PROJECT_ID/simeg-order-entry-backend \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars ENVIRONMENT=production \
-  --set-secrets GEMINI_API_KEY=GEMINI_API_KEY:latest \
+  --set-env-vars ENVIRONMENT=production,FRONTEND_URL=* \
+  --set-secrets GEMINI_API_KEY=simeg-prototype-gemini-api-key:latest \
   --memory 1Gi \
   --cpu 1 \
   --max-instances 10
 ```
 
-## Step 4: Configure Environment Variables
+## Step 4: Verify Secret Access
 
-### Using Google Secret Manager (Recommended for Production)
-
-1. Create a secret for your API key:
+Your API key is stored in the secret `simeg-prototype-gemini-api-key`. Verify Cloud Run can access it:
 
 ```bash
-echo -n "your_actual_gemini_api_key" | gcloud secrets create GEMINI_API_KEY --data-file=-
-```
+# Check if the secret exists
+gcloud secrets describe simeg-prototype-gemini-api-key
 
-2. Grant Cloud Run access to the secret:
-
-```bash
-gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
+# Grant Cloud Run service account access to the secret (if not already granted)
+gcloud secrets add-iam-policy-binding simeg-prototype-gemini-api-key \
   --member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
 
-3. Update the service to use the secret (already included in deploy command above).
-
-### Using Environment Variables Directly (Development Only)
-
+To find your project number:
 ```bash
-gcloud run services update simeg-order-entry-backend \
-  --region us-central1 \
-  --set-env-vars GEMINI_API_KEY="your_api_key_here",FRONTEND_URL="https://your-frontend-url.run.app"
+gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)"
 ```
 
 ## Step 5: Update CORS for Production

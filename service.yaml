@@ -1,0 +1,44 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: simeg-order-entry-backend
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '10'
+        autoscaling.knative.dev/minScale: '0'
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/startup-cpu-boost: 'true'
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      # serviceAccountName: PROJECT_NUMBER-compute@developer.gserviceaccount.com
+      # ^ Commented out - Cloud Run will use the default service account automatically
+      # For production, create a custom service account with minimal permissions
+      # See docs/deployment/SERVICE_YAML_GUIDE.md for instructions
+      containers:
+      - image: gcr.io/poc-huware-ai/simeg-order-entry-backend:latest
+        ports:
+        - name: http1
+          containerPort: 8080
+        env:
+        - name: ENVIRONMENT
+          value: production
+        - name: FRONTEND_URL
+          value: "*"
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: simeg-prototype-gemini-api-key
+              key: latest
+        resources:
+          limits:
+            cpu: '1'
+            memory: 1Gi
+  traffic:
+  - percent: 100
+    latestRevision: true

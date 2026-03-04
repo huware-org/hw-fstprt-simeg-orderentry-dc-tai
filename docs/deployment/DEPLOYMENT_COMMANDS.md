@@ -29,28 +29,35 @@ gcloud run deploy simeg-order-entry-backend \
   --region us-central1 \
   --allow-unauthenticated \
   --set-env-vars ENVIRONMENT=production,FRONTEND_URL=* \
-  --set-env-vars GEMINI_API_KEY="your_api_key_here" \
+  --set-secrets GEMINI_API_KEY=simeg-prototype-gemini-api-key:latest \
   --memory 1Gi \
   --cpu 1 \
   --max-instances 10
 ```
 
-### Production deploy (with Secret Manager):
+### Deploy with service.yaml (Recommended):
 
 ```bash
-# Create secret
-echo -n "your_actual_gemini_api_key" | gcloud secrets create GEMINI_API_KEY --data-file=-
+# 1. Update service.yaml with your PROJECT_ID and PROJECT_NUMBER
 
-# Deploy with secret
-gcloud run deploy simeg-order-entry-backend \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars ENVIRONMENT=production,FRONTEND_URL=* \
-  --set-secrets GEMINI_API_KEY=GEMINI_API_KEY:latest \
-  --memory 1Gi \
-  --cpu 1 \
-  --max-instances 10
+# 2. Build and push image
+docker build -t gcr.io/YOUR_PROJECT_ID/simeg-order-entry-backend:latest .
+docker push gcr.io/YOUR_PROJECT_ID/simeg-order-entry-backend:latest
+
+# 3. Deploy
+gcloud run services replace service.yaml --region us-central1
+```
+
+### Verify secret access:
+
+```bash
+# Check secret exists
+gcloud secrets describe simeg-prototype-gemini-api-key
+
+# Grant access if needed
+gcloud secrets add-iam-policy-binding simeg-prototype-gemini-api-key \
+  --member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 ```
 
 ## Step 4: Update CORS after frontend deployment
