@@ -1,13 +1,13 @@
 """Validation service for customer, item, and price validation."""
 
 from typing import Optional
-from BE.models import (
+from app.models.schemas import (
     CustomerValidationResult,
     TranscodificationResult,
     PriceValidationResult,
     TrafficLight
 )
-from BE.mock_data import mock_customers, mock_transcodification, mock_price_list
+from app.utils.mock_data import mock_customers, mock_transcodification, mock_price_list
 
 
 def validate_customer(customer_name: str) -> CustomerValidationResult:

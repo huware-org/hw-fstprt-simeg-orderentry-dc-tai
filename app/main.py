@@ -1,13 +1,21 @@
 """FastAPI backend for Simeg Order Entry system."""
 
-import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from BE.models import ProcessOrderResponse, TrafficLight
-from BE.extraction_service import extract_order_from_document, ConfigurationError, ExtractionError
-from BE.validation_service import validate_customer, transcodify_item, validate_price, calculate_traffic_light
-from BE.flat_table_transformer import transform_to_flat_table
-from BE.xml_processor import parse_scavolini_xml, lookup_scavolini_mago4_code
+from app.config import settings
+from app.models import ProcessOrderResponse, TrafficLight
+from app.services import (
+    extract_order_from_document,
+    ConfigurationError,
+    ExtractionError,
+    validate_customer,
+    transcodify_item,
+    validate_price,
+    calculate_traffic_light,
+    parse_scavolini_xml,
+    lookup_scavolini_mago4_code,
+)
+from app.utils import transform_to_flat_table
 import xml.etree.ElementTree as ET
 
 
@@ -18,10 +26,11 @@ app = FastAPI(
     description="AI-powered order processing for Simeg manufacturing"
 )
 
-# Add CORS middleware for Gradio frontend
+# Add CORS middleware for separate frontend deployment
+origins = [settings.FRONTEND_URL] if settings.FRONTEND_URL != "*" else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,8 +40,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Validate configuration at startup."""
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    if not settings.GEMINI_API_KEY:
         raise ConfigurationError(
             "GEMINI_API_KEY environment variable is not set. "
             "Please set it before starting the application."

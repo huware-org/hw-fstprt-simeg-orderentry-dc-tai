@@ -1,11 +1,11 @@
 """AI extraction service using Google Gemini."""
 
-import os
 from typing import Optional
 from fastapi import UploadFile
 from google import genai
 from google.genai import types
-from BE.models import ExtractedOrder
+from app.models.schemas import ExtractedOrder
+from app.config.settings import settings
 
 
 # System prompt for Gemini (Italian)
@@ -51,14 +51,13 @@ def _get_gemini_client() -> genai.Client:
     Raises:
         ConfigurationError: If GEMINI_API_KEY is not set
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    if not settings.GEMINI_API_KEY:
         raise ConfigurationError(
             "GEMINI_API_KEY environment variable is not set. "
             "Please set it to your Google Gemini API key."
         )
     
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
 def _detect_file_type(filename: str) -> str:

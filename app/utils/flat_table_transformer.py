@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from BE.models import ExtractedOrder, ExtractedItem, FlatTableRow
+from app.models.schemas import ExtractedOrder, ExtractedItem, FlatTableRow
 
 
 def transform_to_flat_table(

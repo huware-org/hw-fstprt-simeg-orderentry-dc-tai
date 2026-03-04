@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Script to inspect the Scavolini transcodification table structure."""
 
-from BE.scavolini_loader import ScavoliniTranscodificationLoader
+from app.utils.scavolini_loader import ScavoliniTranscodificationLoader
 
 def main():
     loader = ScavoliniTranscodificationLoader()

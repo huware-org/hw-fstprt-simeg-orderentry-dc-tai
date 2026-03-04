@@ -2,11 +2,11 @@
 
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional
-from BE.scavolini_loader import get_scavolini_loader
-from BE.models import ExtractedOrder, ExtractedItem
+from app.utils.scavolini_loader import get_scavolini_loader
+from app.models.schemas import ExtractedOrder, ExtractedItem
+from app.config.settings import settings
 from google import genai
 from google.genai import types
-import os
 
 
 def extract_customer_from_xml_with_ai(xml_content: str) -> str:
@@ -22,12 +22,11 @@ def extract_customer_from_xml_with_ai(xml_content: str) -> str:
         Customer name extracted by AI
     """
     try:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
+        if not settings.GEMINI_API_KEY:
             # Fallback to parsing if no API key
             return extract_customer_from_xml_direct(xml_content)
         
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
         
         prompt = """Analyze this XML order document and extract the customer/company name.
         

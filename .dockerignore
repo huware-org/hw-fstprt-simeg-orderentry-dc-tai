@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.kiro/
+
+# Git
+.git/
+.gitignore
+
+# Environment files (secrets should be injected by Cloud Run)
+.env
+.env.local
+
+# Documentation (not needed in container)
+docs/
+
+# Test files
+tests/
+*.test.py
+
+# Scripts (not needed in container)
+scripts/
+
+# Sample data (not needed in container)
+docs/inputs/

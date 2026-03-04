@@ -8,7 +8,7 @@ from typing import Optional, Dict, List
 class ScavoliniTranscodificationLoader:
     """Loads and queries the Scavolini transcodification table."""
     
-    def __init__(self, xlsx_path: str = "docs/Tabella transcodifica Scavolini 13.02.26.xlsx"):
+    def __init__(self, xlsx_path: str = "docs/transcoding/Tabella transcodifica Scavolini 13.02.26.xlsx"):
         """
         Initialize the loader.
         
