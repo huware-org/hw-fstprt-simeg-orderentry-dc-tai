@@ -53,6 +53,55 @@ class ExtractedItem(BaseModel):
     )
 
 
+class ScavoliniExtractedItem(BaseModel):
+    """Line item extracted from Scavolini/Ernestomeda XML order."""
+    customer_item_code: str = Field(
+        ...,
+        description="Customer's item code (COD_ART_CLIENTE)"
+    )
+    description: str = Field(
+        ...,
+        description="Item description (DESC_ART_CLIENTE)"
+    )
+    color: Optional[str] = Field(
+        None,
+        description="Material color code or name from C_COLPIANO"
+    )
+    thickness: Optional[str] = Field(
+        None,
+        description="Material thickness from C_SPESSORE (e.g., '20,0')"
+    )
+    quantity: float = Field(
+        ...,
+        description="Quantity ordered (QUANTITA_ORDINATA)"
+    )
+    unit_price: Optional[float] = Field(
+        None,
+        description="Unit price calculated from VALORE_NETTO_RIGA / quantity"
+    )
+    # Scavolini-specific characteristic codes for transcodification
+    mat_piano: Optional[str] = Field(
+        None,
+        description="Material code from C_MATPIANO characteristic (e.g., 'MP0047')"
+    )
+    col_piano: Optional[str] = Field(
+        None,
+        description="Color code from C_COLPIANO characteristic (e.g., 'CP1291')"
+    )
+    fin_piano: Optional[str] = Field(
+        None,
+        description="Finish code from C_FINPIANO characteristic (e.g., 'FP0207')"
+    )
+    prof_piano: Optional[str] = Field(
+        None,
+        description="Profile code from C_PROFPIANO characteristic (e.g., 'PP1083')"
+    )
+    reasoning: Optional[str] = Field(
+        None,
+        description="AI reasoning for how this item was identified and extracted"
+    )
+
+
 class LubeExtractedItem(BaseModel):
     """Line item extracted from Lube order document."""
     codice_base: str = Field(
@@ -138,6 +187,42 @@ class LubeExtractedOrder(BaseModel):
     items: list[LubeExtractedItem] = Field(
         ...,
         description="List of Lube line items (at least one required)"
+    )
+
+
+class ScavoliniExtractedOrder(BaseModel):
+    """Complete Scavolini/Ernestomeda order extracted from XML document."""
+    customer_name: str = Field(
+        ...,
+        description="Customer company name from DESTINATARIO_MERCI or COMMITTENTE"
+    )
+    customer_address: Optional[str] = Field(
+        None,
+        description="Customer address from DESTINATARIO_MERCI"
+    )
+    order_number: Optional[str] = Field(
+        None,
+        description="Order number from NUMERO_ORDINE"
+    )
+    order_date: Optional[str] = Field(
+        None,
+        description="Order date in ISO format (YYYY-MM-DD) from DATA_ORDINE"
+    )
+    delivery_date: Optional[str] = Field(
+        None,
+        description="Delivery date in ISO format (YYYY-MM-DD) from DATA_CONSEGNA"
+    )
+    notes: Optional[str] = Field(
+        None,
+        description="General order notes including TIPO_ORDINE, DIVISIONE, etc."
+    )
+    extraction_reasoning: Optional[str] = Field(
+        None,
+        description="Overall reasoning about how the XML document was interpreted"
+    )
+    items: list[ScavoliniExtractedItem] = Field(
+        ...,
+        description="List of Scavolini line items (at least one required)"
     )
 
 

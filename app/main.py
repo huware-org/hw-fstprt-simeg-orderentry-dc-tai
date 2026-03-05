@@ -123,35 +123,7 @@ async def process_order(file: UploadFile = File(...)):
             logger.error(f"Extraction error: {e}")
             raise HTTPException(status_code=503, detail=f"Extraction failed: {str(e)}")
         
-        # Step 4: Parse XML characteristics if Scavolini
-        item_characteristics = None
-        if client_type == ClientType.SCAVOLINI:
-            import xml.etree.ElementTree as ET
-            await file.seek(0)
-            content = await file.read()
-            try:
-                xml_content = content.decode('utf-8')
-            except UnicodeDecodeError:
-                xml_content = content.decode('iso-8859-1')
-            
-            root = ET.fromstring(xml_content)
-            item_characteristics = []
-            for dettaglio in root.findall('.//DETTAGLIO'):
-                chars = {}
-                cod_art = dettaglio.find('COD_ART_CLIENTE')
-                if cod_art is not None and cod_art.text:
-                    chars['cod_art_cliente'] = cod_art.text
-                
-                for car in dettaglio.findall('.//CARATTERISTICA'):
-                    cod_nome = car.find('COD_NOME')
-                    cod_valore = car.find('COD_VALORE')
-                    if cod_nome is not None and cod_valore is not None:
-                        if cod_nome.text and cod_valore.text:
-                            chars[cod_nome.text] = cod_valore.text
-                
-                item_characteristics.append(chars)
-        
-        # Step 5: Validate customer (COMMENTED OUT FOR PROTOTYPE)
+        # Step 4: Validate customer (COMMENTED OUT FOR PROTOTYPE)
         # customer_result = validate_customer(extracted_order.customer_name)
         # execution_log.append(customer_result.message)
         
@@ -165,7 +137,7 @@ async def process_order(file: UploadFile = File(...)):
         )
         execution_log.append(customer_result.message)
         
-        # Step 6: Transcodify items using client-specific strategy
+        # Step 5: Transcodify items using client-specific strategy
         transcodified_items = []
         item_traffic_lights = []
         max_price_variance = 0.0
@@ -183,15 +155,8 @@ async def process_order(file: UploadFile = File(...)):
             # Prepare client-specific lookup parameters
             lookup_kwargs = {}
             
-            if client_type == ClientType.SCAVOLINI and item_characteristics and idx <= len(item_characteristics):
-                chars = item_characteristics[idx - 1]
-                lookup_kwargs = {
-                    'cod_art_cliente': chars.get('cod_art_cliente'),
-                    'mat_piano': chars.get('C_MATPIANO'),
-                    'col_piano': chars.get('C_COLPIANO'),
-                    'fin_piano': chars.get('C_FINPIANO'),
-                    'prof_piano': chars.get('C_PROFPIANO')
-                }
+            if client_type == ClientType.SCAVOLINI:
+                # Scavolini characteristics are now extracted by AI and stored in the item
                 execution_log.append(f"🔍 Using {strategy.get_client_name()} transcodification table...")
             elif client_type == ClientType.LUBE:
                 # Lube-specific data is stored in the item
@@ -204,7 +169,9 @@ async def process_order(file: UploadFile = File(...)):
             
             if mago4_code:
                 if client_type == ClientType.SCAVOLINI:
-                    execution_log.append(f"✅ Transcodification: {lookup_kwargs.get('cod_art_cliente')} → {mago4_code}")
+                    mat_piano = getattr(item, '_scav_mat_piano', 'N/A')
+                    col_piano = getattr(item, '_scav_col_piano', 'N/A')
+                    execution_log.append(f"✅ Transcodification: {item.customer_item_code} (mat={mat_piano}, col={col_piano}) → {mago4_code}")
                 elif client_type == ClientType.LUBE:
                     codice_base = getattr(item, '_lube_codice_base', 'N/A')
                     caratteristica = getattr(item, '_lube_caratteristica', 'N/A')
@@ -235,7 +202,7 @@ async def process_order(file: UploadFile = File(...)):
                 all_items_transcodified = False
                 item_traffic_lights.append(TrafficLight.RED)
         
-        # Step 7: Calculate global traffic light
+        # Step 6: Calculate global traffic light
         if client_type in [ClientType.SCAVOLINI, ClientType.LUBE] and all_items_transcodified:
             # For real client data with successful transcodification
             # GREEN: All items transcodified successfully
@@ -293,7 +260,7 @@ async def process_order(file: UploadFile = File(...)):
         else:
             execution_log.append("❌ Critical issues detected - manual intervention required")
         
-        # Step 8: Transform to flat table
+        # Step 7: Transform to flat table
         if not transcodified_items:
             flat_table = []
             execution_log.append("⚠️ No items could be transcodified - empty flat table generated")
@@ -320,7 +287,7 @@ async def process_order(file: UploadFile = File(...)):
                 "client_type": client_type.value,
                 "strategy": strategy.get_client_name(),
                 "reasoning_text": ai_reasoning,
-                "extraction_method": "AI with thinking mode" if client_type != ClientType.SCAVOLINI else "XML parsing"
+                "extraction_method": "AI with structured extraction"
             }
             logger.debug(f"Reasoning data prepared: {reasoning_data.keys()}")
         else:

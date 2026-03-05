@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import UploadFile
 from google import genai
 from google.genai import types
-from app.models.schemas import ExtractedOrder, LubeExtractedOrder
+from app.models.schemas import ExtractedOrder, LubeExtractedOrder, ScavoliniExtractedOrder
 from app.config.settings import settings, logger
 
 
@@ -61,6 +61,46 @@ REGOLE TESTATA (OBBLIGATORIO):
 6. "extraction_reasoning": Breve spiegazione di come hai interpretato il documento (es. "Documento Lube con 6 articoli, identificato cliente e date consegna")
 
 IMPORTANTE: Estrai TUTTE le date che trovi. Includi sempre il campo "reasoning" per ogni articolo e "extraction_reasoning" per il documento.
+"""
+
+
+# Scavolini-specific system prompt (Italian) with reasoning
+SCAVOLINI_SYSTEM_PROMPT_WITH_REASONING = """Sei un estrattore dati per ordini Scavolini/Ernestomeda da file XML.
+
+Il tuo compito è estrarre le informazioni dai documenti XML degli ordini e strutturarle nel formato JSON richiesto.
+
+IMPORTANTE: Prima di estrarre i dati, SPIEGA il tuo ragionamento nel campo "extraction_reasoning".
+
+REGOLE DI ESTRAZIONE RIGHE ORDINE (Items):
+Per ogni articolo (DETTAGLIO) nel documento XML, estrai:
+
+1. "customer_item_code": Codice articolo cliente (es. "77081361", "77080023")
+2. "description": Descrizione dell'articolo (es. "SCHIENALE AL CQ", "PIANO LINEARE PROF.65")
+3. "color": Colore/materiale del piano - cerca nelle CARATTERISTICHE il campo "C_COLPIANO" o "Colore piano" (es. "Taj Mahal_Qzt", "CP1291")
+4. "thickness": Spessore - cerca nelle CARATTERISTICHE il campo "C_SPESSORE" o "Spessore" (es. "20,0", "12,0")
+5. "quantity": Quantità ordinata - cerca "QUANTITA_ORDINATA" (es. 10440.000, 180.000)
+6. "unit_price": Prezzo unitario - calcola da "VALORE_NETTO_RIGA" diviso per quantità
+7. "discount_percentage": Sconto percentuale se presente
+8. "mat_piano": Materiale piano - cerca "C_MATPIANO" nelle CARATTERISTICHE (es. "MP0047")
+9. "col_piano": Codice colore - cerca "C_COLPIANO" nelle CARATTERISTICHE (es. "CP1291")
+10. "fin_piano": Finitura piano - cerca "C_FINPIANO" nelle CARATTERISTICHE (es. "FP0207")
+11. "prof_piano": Profilo piano - cerca "C_PROFPIANO" nelle CARATTERISTICHE (es. "PP1083")
+
+REGOLE DI ESTRAZIONE TESTATA ORDINE:
+1. "customer_name": Nome cliente - cerca in "DESTINATARIO_MERCI/ID" o "COMMITTENTE/ID" (es. "Scavolini S.p.a.")
+2. "customer_address": Indirizzo completo - combina INDIRIZZO, LOCALITA, CAP da DESTINATARIO_MERCI
+3. "order_date": Data ordine - cerca "DATA_ORDINE" e converti in formato ISO YYYY-MM-DD (es. "18/12/2025" → "2025-12-18")
+4. "order_number": Numero ordine - cerca "NUMERO_ORDINE"
+5. "delivery_date": Data consegna - cerca "DATA_CONSEGNA" nei DETTAGLIO e converti in formato ISO
+6. "payment_terms_requested": Termini di pagamento se presenti
+7. "notes": Note generali - includi TIPO_ORDINE, DIVISIONE, o altre info rilevanti
+8. "extraction_reasoning": Spiega brevemente come hai interpretato il documento XML (es. "Ordine Scavolini XML con 4 articoli in Quarzite Taj Mahal, estratti codici caratteristica per transcodifica")
+
+IMPORTANTE:
+- Estrai TUTTI i codici caratteristica (mat_piano, col_piano, fin_piano, prof_piano) perché sono necessari per la transcodifica
+- Converti SEMPRE le date dal formato DD/MM/YYYY al formato ISO YYYY-MM-DD
+- Se trovi più date consegna (una per articolo), usa la prima o la più vicina
+- Includi sempre il campo "extraction_reasoning" per spiegare il tuo processo
 """
 
 
@@ -362,3 +402,91 @@ Estrai i dati seguendo le regole del prompt principale.
     except Exception as e:
         logger.error(f"Lube order extraction failed: {e}", exc_info=True)
         raise ExtractionError(f"Failed to extract Lube order data: {str(e)}")
+
+
+async def extract_scavolini_order_from_document(
+    file: UploadFile,
+) -> tuple[ScavoliniExtractedOrder, Optional[str]]:
+    """
+    Extract structured Scavolini/Ernestomeda order data from XML document using AI.
+    
+    This replaces rigid XML parsing with flexible AI extraction that can handle
+    variations in XML structure while still extracting the characteristic codes
+    needed for transcodification.
+    
+    Args:
+        file: Uploaded XML document file
+    
+    Returns:
+        Tuple of (ScavoliniExtractedOrder, reasoning_text)
+    
+    Raises:
+        ConfigurationError: If GEMINI_API_KEY is not set
+        ExtractionError: If AI extraction fails
+    """
+    try:
+        logger.info(f"Starting Scavolini order extraction for: {file.filename}")
+        
+        # Get Gemini client
+        client = _get_gemini_client()
+        
+        # Read file content
+        content = await file.read()
+        logger.debug(f"Read {len(content)} bytes from file")
+        
+        # Decode XML content
+        try:
+            text_content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text_content = content.decode("iso-8859-1")
+            except UnicodeDecodeError:
+                text_content = content.decode("windows-1252", errors="ignore")
+        
+        logger.debug(f"Decoded XML content: {len(text_content)} characters")
+        
+        # Prepare content for Gemini
+        parts = [
+            types.Part.from_text(text=SCAVOLINI_SYSTEM_PROMPT_WITH_REASONING),
+            types.Part.from_text(text=f"\n\nContenuto del documento XML:\n{text_content}")
+        ]
+        
+        # Create generation config with Scavolini response schema
+        generation_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ScavoliniExtractedOrder,
+        )
+        
+        # Call Gemini API
+        logger.info("Calling Gemini API for Scavolini extraction from XML")
+        response = client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=parts,
+            config=generation_config,
+        )
+        
+        # Parse response
+        if not response.text:
+            logger.error("Gemini returned empty response")
+            raise ExtractionError("Gemini returned empty response")
+        
+        logger.debug(f"Gemini response length: {len(response.text)} characters")
+        
+        # Parse JSON response into ScavoliniExtractedOrder
+        extracted_order = ScavoliniExtractedOrder.model_validate_json(response.text)
+        logger.info(f"Successfully extracted Scavolini order with {len(extracted_order.items)} items")
+        
+        # Get reasoning from the JSON response
+        reasoning = extracted_order.extraction_reasoning
+        if reasoning:
+            logger.info(f"Captured AI reasoning from JSON: {len(reasoning)} characters")
+        else:
+            logger.warning("No extraction_reasoning in response")
+        
+        return extracted_order, reasoning
+        
+    except ConfigurationError:
+        raise
+    except Exception as e:
+        logger.error(f"Scavolini order extraction failed: {e}", exc_info=True)
+        raise ExtractionError(f"Failed to extract Scavolini order data: {str(e)}")

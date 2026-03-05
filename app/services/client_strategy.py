@@ -48,44 +48,76 @@ class ScavoliniStrategy(ClientStrategy):
     """Strategy for Scavolini/Ernestomeda orders."""
     
     async def extract_order(self, file: UploadFile) -> tuple[ExtractedOrder, Optional[str]]:
-        """Extract Scavolini order from XML."""
-        from app.services.xml_processor import parse_scavolini_xml
+        """Extract Scavolini order using AI extraction from XML."""
+        from app.services.extraction_service import extract_scavolini_order_from_document
         
-        logger.info("Extracting Scavolini order from XML")
-        content = await file.read()
+        logger.info("Extracting Scavolini order using AI from XML")
         
-        # Try different encodings
-        try:
-            xml_content = content.decode('utf-8')
-            logger.debug("Successfully decoded XML as UTF-8")
-        except UnicodeDecodeError:
-            try:
-                xml_content = content.decode('iso-8859-1')
-                logger.debug("Successfully decoded XML as ISO-8859-1")
-            except UnicodeDecodeError:
-                xml_content = content.decode('windows-1252')
-                logger.debug("Successfully decoded XML as Windows-1252")
+        # Extract using Scavolini-specific AI model
+        scavolini_order, reasoning = await extract_scavolini_order_from_document(file)
+        logger.info(f"Scavolini extraction complete: {len(scavolini_order.items)} items")
+        logger.debug(f"Reasoning from extraction: {reasoning is not None}")
         
-        order = parse_scavolini_xml(xml_content, use_ai_extraction=True)
-        logger.info(f"Scavolini extraction complete: {len(order.items)} items")
+        # Convert to generic ExtractedOrder for compatibility
+        items = []
+        for idx, scav_item in enumerate(scavolini_order.items, 1):
+            logger.debug(f"Processing Scavolini item {idx}: {scav_item.customer_item_code}")
+            
+            # Build description with reasoning if available
+            description = scav_item.description
+            if scav_item.reasoning:
+                description += f" | AI: {scav_item.reasoning}"
+            
+            item = ExtractedItem(
+                customer_item_code=scav_item.customer_item_code,
+                description=description,
+                color=scav_item.color,
+                thickness=scav_item.thickness,
+                quantity=scav_item.quantity,
+                unit_price=scav_item.unit_price,
+                discount_percentage=None
+            )
+            # Store Scavolini-specific characteristic codes for transcodification
+            item._scav_mat_piano = scav_item.mat_piano
+            item._scav_col_piano = scav_item.col_piano
+            item._scav_fin_piano = scav_item.fin_piano
+            item._scav_prof_piano = scav_item.prof_piano
+            items.append(item)
         
-        # XML parsing doesn't use AI reasoning, so return None
-        reasoning = "Scavolini XML: Parsed structured XML format with predefined tags (TESTATA, DETTAGLIO, CARATTERISTICA). No AI reasoning needed for structured data."
+        order = ExtractedOrder(
+            customer_name=scavolini_order.customer_name,
+            customer_address=scavolini_order.customer_address,
+            order_number=scavolini_order.order_number,
+            order_date=scavolini_order.order_date,
+            delivery_date=scavolini_order.delivery_date,
+            payment_terms_requested=None,
+            notes=scavolini_order.notes,
+            items=items
+        )
+        
+        logger.debug(f"Returning order with reasoning: {reasoning is not None}")
         return order, reasoning
     
     def lookup_mago4_code(self, item: ExtractedItem, **kwargs) -> Optional[str]:
         """Lookup using Scavolini transcodification table."""
         from app.services.xml_processor import lookup_scavolini_mago4_code
         
-        logger.debug(f"Looking up Scavolini code for item: {item.customer_item_code}")
+        # Extract Scavolini-specific characteristic codes
+        mat_piano = getattr(item, '_scav_mat_piano', None) or kwargs.get('mat_piano')
+        col_piano = getattr(item, '_scav_col_piano', None) or kwargs.get('col_piano')
+        fin_piano = getattr(item, '_scav_fin_piano', None) or kwargs.get('fin_piano')
+        prof_piano = getattr(item, '_scav_prof_piano', None) or kwargs.get('prof_piano')
+        cod_art_cliente = kwargs.get('cod_art_cliente') or item.customer_item_code
         
-        # Extract characteristics from kwargs
+        logger.debug(f"Looking up Scavolini code for item: {item.customer_item_code}")
+        logger.debug(f"Characteristics: mat={mat_piano}, col={col_piano}, fin={fin_piano}, prof={prof_piano}")
+        
         result = lookup_scavolini_mago4_code(
-            cod_art_cliente=kwargs.get('cod_art_cliente'),
-            mat_piano=kwargs.get('mat_piano'),
-            col_piano=kwargs.get('col_piano'),
-            fin_piano=kwargs.get('fin_piano'),
-            prof_piano=kwargs.get('prof_piano')
+            cod_art_cliente=cod_art_cliente,
+            mat_piano=mat_piano,
+            col_piano=col_piano,
+            fin_piano=fin_piano,
+            prof_piano=prof_piano
         )
         
         if result:
