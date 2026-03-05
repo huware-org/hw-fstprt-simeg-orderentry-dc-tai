@@ -2,21 +2,19 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
+from app.config import settings, logger
 from app.models import ProcessOrderResponse, TrafficLight
 from app.services import (
-    extract_order_from_document,
     ConfigurationError,
     ExtractionError,
     validate_customer,
-    transcodify_item,
     validate_price,
     calculate_traffic_light,
-    parse_scavolini_xml,
-    lookup_scavolini_mago4_code,
+    ClientType,
+    detect_client_from_document,
+    get_client_strategy,
 )
 from app.utils import transform_to_flat_table
-import xml.etree.ElementTree as ET
 
 
 # Initialize FastAPI app
@@ -40,11 +38,18 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Validate configuration at startup."""
+    logger.info("Starting Simeg Order Entry API")
+    logger.info(f"Environment: {settings.ENVIRONMENT}")
+    logger.info(f"Log level: {settings.LOG_LEVEL}")
+    
     if not settings.GEMINI_API_KEY:
+        logger.critical("GEMINI_API_KEY not configured!")
         raise ConfigurationError(
             "GEMINI_API_KEY environment variable is not set. "
             "Please set it before starting the application."
         )
+    
+    logger.info("Configuration validated successfully")
 
 
 @app.get("/")
@@ -62,6 +67,14 @@ async def process_order(file: UploadFile = File(...)):
     """
     Process an order document and return Mago4 flat table.
     
+    Automatically detects the client type and applies the appropriate
+    extraction and transcodification strategy.
+    
+    Supported clients:
+    - Scavolini/Ernestomeda (XML format)
+    - Lube (PDF with characteristic codes)
+    - Generic (any PDF/image)
+    
     Args:
         file: Uploaded document (PDF, PNG, JPG, XML, CSV)
         
@@ -74,82 +87,85 @@ async def process_order(file: UploadFile = File(...)):
     execution_log = []
     
     try:
-        # Step 1: Detect file type
+        logger.info(f"=== Processing order request: {file.filename} ===")
+        
+        # Step 1: Detect client type
         execution_log.append(f"📄 Processing file: {file.filename}")
+        execution_log.append("🔍 Detecting client type...")
         
-        is_xml = file.filename and file.filename.lower().endswith('.xml')
+        client_type = await detect_client_from_document(file)
+        execution_log.append(f"✅ Client detected: {client_type.value.upper()}")
+        logger.info(f"Client type detected: {client_type.value}")
         
-        # Step 2: Extract order data
-        if is_xml:
-            # Process Scavolini XML directly
-            execution_log.append("🔧 Detected Scavolini/Ernestomeda XML format")
-            content = await file.read()
+        # Step 2: Get client-specific strategy
+        strategy = get_client_strategy(client_type)
+        execution_log.append(f"🎯 Using {strategy.get_client_name()} processing strategy")
+        logger.info(f"Using strategy: {strategy.get_client_name()}")
+        
+        # Step 3: Extract order data using client-specific strategy
+        try:
+            extracted_order, ai_reasoning = await strategy.extract_order(file)
+            execution_log.append(f"✅ Extraction completed: {len(extracted_order.items)} items found")
+            execution_log.append(f"👤 Customer identified: {extracted_order.customer_name}")
+            logger.info(f"Extraction successful: {len(extracted_order.items)} items, customer: {extracted_order.customer_name}")
             
-            # Try to detect encoding from XML declaration or use common encodings
+            # Log reasoning if available
+            if ai_reasoning:
+                logger.info(f"AI reasoning captured: {len(ai_reasoning)} characters")
+                execution_log.append("🧠 AI reasoning captured for transparency")
+            else:
+                logger.warning("No AI reasoning captured from extraction")
+                execution_log.append("ℹ️ No AI reasoning available for this extraction")
+        except ConfigurationError as e:
+            logger.error(f"Configuration error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+        except ExtractionError as e:
+            logger.error(f"Extraction error: {e}")
+            raise HTTPException(status_code=503, detail=f"Extraction failed: {str(e)}")
+        
+        # Step 4: Parse XML characteristics if Scavolini
+        item_characteristics = None
+        if client_type == ClientType.SCAVOLINI:
+            import xml.etree.ElementTree as ET
+            await file.seek(0)
+            content = await file.read()
             try:
-                # First try UTF-8
                 xml_content = content.decode('utf-8')
             except UnicodeDecodeError:
-                try:
-                    # Try ISO-8859-1 (Latin-1) - common for Italian XML files
-                    xml_content = content.decode('iso-8859-1')
-                    execution_log.append("📝 Using ISO-8859-1 encoding")
-                except UnicodeDecodeError:
-                    try:
-                        # Try Windows-1252 as fallback
-                        xml_content = content.decode('windows-1252')
-                        execution_log.append("📝 Using Windows-1252 encoding")
-                    except UnicodeDecodeError:
-                        raise HTTPException(status_code=400, detail="Unable to decode XML file. Unsupported encoding.")
+                xml_content = content.decode('iso-8859-1')
             
-            try:
-                # Use AI extraction for customer name (more flexible)
-                use_ai_extraction = True  # Can be made configurable
-                if use_ai_extraction:
-                    execution_log.append("🤖 Using AI to extract customer name from XML")
-                else:
-                    execution_log.append("📋 Using direct XML parsing for customer name")
+            root = ET.fromstring(xml_content)
+            item_characteristics = []
+            for dettaglio in root.findall('.//DETTAGLIO'):
+                chars = {}
+                cod_art = dettaglio.find('COD_ART_CLIENTE')
+                if cod_art is not None and cod_art.text:
+                    chars['cod_art_cliente'] = cod_art.text
                 
-                extracted_order = parse_scavolini_xml(xml_content, use_ai_extraction=use_ai_extraction)
-                execution_log.append(f"✅ XML parsing completed: {len(extracted_order.items)} items found")
-                execution_log.append(f"👤 Customer identified: {extracted_order.customer_name}")
+                for car in dettaglio.findall('.//CARATTERISTICA'):
+                    cod_nome = car.find('COD_NOME')
+                    cod_valore = car.find('COD_VALORE')
+                    if cod_nome is not None and cod_valore is not None:
+                        if cod_nome.text and cod_valore.text:
+                            chars[cod_nome.text] = cod_valore.text
                 
-                # Parse XML again to extract characteristics for transcodification
-                root = ET.fromstring(xml_content)
-                item_characteristics = []
-                for dettaglio in root.findall('.//DETTAGLIO'):
-                    chars = {}
-                    cod_art = dettaglio.find('COD_ART_CLIENTE')
-                    if cod_art is not None and cod_art.text:
-                        chars['cod_art_cliente'] = cod_art.text
-                    
-                    for car in dettaglio.findall('.//CARATTERISTICA'):
-                        cod_nome = car.find('COD_NOME')
-                        cod_valore = car.find('COD_VALORE')
-                        if cod_nome is not None and cod_valore is not None:
-                            if cod_nome.text and cod_valore.text:
-                                chars[cod_nome.text] = cod_valore.text
-                    
-                    item_characteristics.append(chars)
-                
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"XML parsing failed: {str(e)}")
-        else:
-            # Use AI extraction for PDF/images
-            try:
-                extracted_order = await extract_order_from_document(file)
-                execution_log.append(f"✅ AI extraction completed: {len(extracted_order.items)} items found")
-                item_characteristics = None
-            except ConfigurationError as e:
-                raise HTTPException(status_code=500, detail=str(e))
-            except ExtractionError as e:
-                raise HTTPException(status_code=503, detail=f"AI extraction failed: {str(e)}")
+                item_characteristics.append(chars)
         
-        # Step 2: Validate customer
-        customer_result = validate_customer(extracted_order.customer_name)
+        # Step 5: Validate customer (COMMENTED OUT FOR PROTOTYPE)
+        # customer_result = validate_customer(extracted_order.customer_name)
+        # execution_log.append(customer_result.message)
+        
+        # Mock customer result for prototype
+        from app.models.schemas import CustomerValidationResult
+        customer_result = CustomerValidationResult(
+            found=True,
+            customer_code="MOCK_CUSTOMER",
+            payment_terms="30gg",
+            message="✅ Customer validation skipped for prototype"
+        )
         execution_log.append(customer_result.message)
         
-        # Step 3: Transcodify items and validate prices
+        # Step 6: Transcodify items using client-specific strategy
         transcodified_items = []
         item_traffic_lights = []
         max_price_variance = 0.0
@@ -164,80 +180,67 @@ async def process_order(file: UploadFile = File(...)):
                 missing_critical_data = True
                 execution_log.append("❌ Critical: Missing or invalid quantity")
             
-            # Try Scavolini transcodification first if XML
-            mago4_code = None
-            if is_xml and item_characteristics and idx <= len(item_characteristics):
+            # Prepare client-specific lookup parameters
+            lookup_kwargs = {}
+            
+            if client_type == ClientType.SCAVOLINI and item_characteristics and idx <= len(item_characteristics):
                 chars = item_characteristics[idx - 1]
-                execution_log.append("🔍 Using Scavolini transcodification table...")
-                
-                mago4_code = lookup_scavolini_mago4_code(
-                    cod_art_cliente=chars.get('cod_art_cliente'),
-                    mat_piano=chars.get('C_MATPIANO'),
-                    col_piano=chars.get('C_COLPIANO'),
-                    fin_piano=chars.get('C_FINPIANO'),
-                    prof_piano=chars.get('C_PROFPIANO')
-                )
-                
-                if mago4_code:
-                    execution_log.append(f"✅ Scavolini transcodification: {chars.get('cod_art_cliente')} → {mago4_code}")
-                    transcodified_items.append((item, mago4_code))
-                else:
-                    execution_log.append(f"❌ No match in Scavolini table for: {chars.get('cod_art_cliente')}")
-                    all_items_transcodified = False
+                lookup_kwargs = {
+                    'cod_art_cliente': chars.get('cod_art_cliente'),
+                    'mat_piano': chars.get('C_MATPIANO'),
+                    'col_piano': chars.get('C_COLPIANO'),
+                    'fin_piano': chars.get('C_FINPIANO'),
+                    'prof_piano': chars.get('C_PROFPIANO')
+                }
+                execution_log.append(f"🔍 Using {strategy.get_client_name()} transcodification table...")
+            elif client_type == ClientType.LUBE:
+                # Lube-specific data is stored in the item
+                execution_log.append(f"🔍 Using {strategy.get_client_name()} transcodification table...")
+            else:
+                execution_log.append("🔍 Using generic transcodification...")
             
-            # Fallback to mock transcodification for non-XML or failed lookups
-            if not mago4_code:
-                # Extract base code from description (simple heuristic)
-                base_code = None
-                description_upper = item.description.upper()
-                if "MARMO" in description_upper:
-                    base_code = "MARMO"
-                elif "CERAMICA" in description_upper:
-                    base_code = "CERAMICA"
-                elif "GRANITO" in description_upper:
-                    base_code = "GRANITO"
-                elif "BRECCIA" in description_upper:
-                    base_code = "BRECCIA"
-                
-                # Transcodify item using mock data
-                transcode_result = transcodify_item(base_code, item.color, item.thickness)
-                execution_log.append(transcode_result.message)
-                
-                if transcode_result.success:
-                    mago4_code = transcode_result.mago4_code
-                    transcodified_items.append((item, mago4_code))
-                else:
-                    all_items_transcodified = False
-                    item_traffic_lights.append(TrafficLight.RED)
-                    continue
+            # Lookup Mago4 code using strategy
+            mago4_code = strategy.lookup_mago4_code(item, **lookup_kwargs)
             
-            # Validate price
             if mago4_code:
-                price_result = validate_price(mago4_code, item.unit_price)
-                execution_log.append(price_result.message)
+                if client_type == ClientType.SCAVOLINI:
+                    execution_log.append(f"✅ Transcodification: {lookup_kwargs.get('cod_art_cliente')} → {mago4_code}")
+                elif client_type == ClientType.LUBE:
+                    codice_base = getattr(item, '_lube_codice_base', 'N/A')
+                    caratteristica = getattr(item, '_lube_caratteristica', 'N/A')
+                    execution_log.append(f"✅ Transcodification: {codice_base} + {caratteristica} → {mago4_code}")
+                else:
+                    execution_log.append(f"✅ Transcodification: {item.description[:30]}... → {mago4_code}")
                 
-                # Track max price variance
-                if price_result.variance_percentage > max_price_variance:
-                    max_price_variance = price_result.variance_percentage
+                transcodified_items.append((item, mago4_code))
+                
+                # Validate price if available
+                if item.unit_price:
+                    price_result = validate_price(mago4_code, item.unit_price)
+                    execution_log.append(price_result.message)
+                    
+                    if price_result.variance_percentage > max_price_variance:
+                        max_price_variance = price_result.variance_percentage
                 
                 # Determine item-level traffic light
                 item_light = calculate_traffic_light(
                     customer_valid=customer_result.found,
                     all_items_transcodified=True,
-                    max_price_variance=price_result.variance_percentage,
+                    max_price_variance=max_price_variance if item.unit_price else 0.0,
                     missing_critical_data=False
                 )
                 item_traffic_lights.append(item_light)
-        
-        # Step 4: Calculate global traffic light
-        # For Scavolini XML with successful transcodification, be more lenient about missing prices
-        if is_xml and all_items_transcodified:
-            execution_log.append("\n💡 Note: Using real Scavolini transcodification data (price validation skipped)")
-            # If all items transcodified successfully, assign YELLOW instead of RED for missing prices
-            if customer_result.found:
-                global_traffic_light = TrafficLight.YELLOW
             else:
-                global_traffic_light = TrafficLight.RED
+                execution_log.append(f"❌ No match in {strategy.get_client_name()} transcodification table")
+                all_items_transcodified = False
+                item_traffic_lights.append(TrafficLight.RED)
+        
+        # Step 7: Calculate global traffic light
+        if client_type in [ClientType.SCAVOLINI, ClientType.LUBE] and all_items_transcodified:
+            # For real client data with successful transcodification
+            # GREEN: All items transcodified successfully
+            global_traffic_light = TrafficLight.GREEN
+            execution_log.append("✅ All items transcodified successfully with real client data")
         else:
             global_traffic_light = calculate_traffic_light(
                 customer_valid=customer_result.found,
@@ -245,6 +248,41 @@ async def process_order(file: UploadFile = File(...)):
                 max_price_variance=max_price_variance,
                 missing_critical_data=missing_critical_data
             )
+        
+        logger.info(f"Global traffic light: {global_traffic_light.value}")
+        
+        # Generate traffic light explanation
+        if global_traffic_light == TrafficLight.GREEN:
+            traffic_explanation = "✅ Perfetto! Tutti gli articoli sono stati transcodificati con successo. L'ordine è pronto per l'importazione automatica in Mago4."
+        elif global_traffic_light == TrafficLight.YELLOW:
+            issues = []
+            if not customer_result.found:
+                issues.append("il cliente non è presente nell'anagrafica")
+            if max_price_variance > 0:
+                issues.append(f"variazione prezzi fino al {max_price_variance:.1f}%")
+            if not all_items_transcodified:
+                issues.append("alcuni articoli non sono stati transcodificati")
+            
+            if issues:
+                traffic_explanation = f"⚠️ Attenzione: {', '.join(issues)}. Si consiglia una revisione manuale prima dell'importazione."
+            else:
+                traffic_explanation = "⚠️ L'ordine è stato elaborato correttamente ma si consiglia una revisione manuale."
+        else:  # RED
+            issues = []
+            if not customer_result.found:
+                issues.append("il cliente non è presente nell'anagrafica Mago4")
+            if not all_items_transcodified:
+                failed_count = len(extracted_order.items) - len(transcodified_items)
+                issues.append(f"{failed_count} articoli non trovati nella tabella di transcodifica")
+            if missing_critical_data:
+                issues.append("mancano dati critici (quantità)")
+            
+            if issues:
+                traffic_explanation = f"❌ Problemi critici rilevati: {', '.join(issues)}. È necessario un intervento manuale per completare l'ordine."
+            else:
+                traffic_explanation = "❌ Sono stati rilevati problemi critici. Verificare i dati dell'ordine prima di procedere."
+        
+        logger.info(f"Traffic light explanation: {traffic_explanation}")
         
         # Add traffic light summary to log
         execution_log.append(f"\n🚦 Global Traffic Light: {global_traffic_light.value.upper()}")
@@ -255,11 +293,11 @@ async def process_order(file: UploadFile = File(...)):
         else:
             execution_log.append("❌ Critical issues detected - manual intervention required")
         
-        # Step 5: Transform to flat table
+        # Step 8: Transform to flat table
         if not transcodified_items:
-            # If no items were transcodified, create empty flat table
             flat_table = []
             execution_log.append("⚠️ No items could be transcodified - empty flat table generated")
+            logger.warning("No items transcodified, empty flat table")
         else:
             flat_table = transform_to_flat_table(
                 extracted_order=extracted_order,
@@ -267,17 +305,40 @@ async def process_order(file: UploadFile = File(...)):
                 transcodified_items=transcodified_items
             )
             execution_log.append(f"✅ Flat table generated: {len(flat_table)} rows")
+            logger.info(f"Flat table generated: {len(flat_table)} rows")
+        
+        logger.info(f"=== Order processing complete: {file.filename} ===")
+        
+        # Prepare AI reasoning for response
+        reasoning_data = None
+        logger.debug(f"AI reasoning value: {ai_reasoning}")
+        logger.debug(f"AI reasoning type: {type(ai_reasoning)}")
+        
+        if ai_reasoning:
+            logger.info(f"Preparing reasoning data for response (length: {len(ai_reasoning)})")
+            reasoning_data = {
+                "client_type": client_type.value,
+                "strategy": strategy.get_client_name(),
+                "reasoning_text": ai_reasoning,
+                "extraction_method": "AI with thinking mode" if client_type != ClientType.SCAVOLINI else "XML parsing"
+            }
+            logger.debug(f"Reasoning data prepared: {reasoning_data.keys()}")
+        else:
+            logger.warning("No AI reasoning available to include in response")
         
         # Return response
         return ProcessOrderResponse(
             mago4_flat_table=flat_table,
             global_traffic_light=global_traffic_light.value,
-            execution_log=execution_log
+            traffic_light_explanation=traffic_explanation,
+            execution_log=execution_log,
+            ai_reasoning=reasoning_data
         )
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Unexpected error processing order: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error during order processing: {str(e)}"

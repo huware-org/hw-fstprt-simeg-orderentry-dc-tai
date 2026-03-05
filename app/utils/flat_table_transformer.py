@@ -30,9 +30,9 @@ def transform_to_flat_table(
     created_date = datetime.utcnow().isoformat()
     
     # Header fields (repeated on each row)
-    h_external_ord_no = extracted_order.customer_name  # Using customer name as order reference
+    h_external_ord_no = getattr(extracted_order, 'order_number', None) or extracted_order.customer_name
     h_order_date = extracted_order.order_date
-    h_confirmed_delivery_date = None  # Not extracted in this prototype
+    h_confirmed_delivery_date = getattr(extracted_order, 'delivery_date', None)  # Extract from Lube orders
     h_notes = extracted_order.notes
     h_currency = "EUR"
     

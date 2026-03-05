@@ -3,6 +3,9 @@
 from app.models.schemas import (
     ExtractedItem,
     ExtractedOrder,
+    LubeExtractedItem,
+    LubeExtractedOrder,
+    LubeCodeEnum,
     FlatTableRow,
     ProcessOrderResponse,
     CustomerValidationResult,
@@ -14,6 +17,9 @@ from app.models.schemas import (
 __all__ = [
     "ExtractedItem",
     "ExtractedOrder",
+    "LubeExtractedItem",
+    "LubeExtractedOrder",
+    "LubeCodeEnum",
     "FlatTableRow",
     "ProcessOrderResponse",
     "CustomerValidationResult",

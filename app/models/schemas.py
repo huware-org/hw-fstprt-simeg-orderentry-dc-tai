@@ -1,8 +1,17 @@
 """Pydantic data models for the Simeg Order Entry system."""
 
 from enum import Enum
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, Field
+
+
+# Lube characteristic codes extracted from transcodification table
+LubeCodeEnum = Literal[
+    "D001","D005","D006","D008","D009","D010","D011","D020","D021","D022","D023","D025",
+    "G01","G20","G21","G22","G23","G40","G43","G70","G71","G72","G73","G80","G81","G90","G91","G92","G93","G94","G95","G96",
+    "KS01","KS02","KS03","KS04","KS05","KS06","KS07","KS08","KS09","KS11","KS12","KS13","KS53","KS54","KS59","KS61","KS64","KS65",
+    "LT14","LT26","LT27","LT28","LT29","LT30","LT56","LT57","LT58","LT59","LT60","LT61"
+]
 
 
 class TrafficLight(str, Enum):
@@ -44,6 +53,26 @@ class ExtractedItem(BaseModel):
     )
 
 
+class LubeExtractedItem(BaseModel):
+    """Line item extracted from Lube order document."""
+    codice_base: str = Field(
+        ...,
+        description="Base product code from Lube (e.g., 'BASE123')"
+    )
+    caratteristica: LubeCodeEnum = Field(
+        ...,
+        description="Characteristic code - MUST be exactly one of the valid codes from the enum"
+    )
+    quantita: float = Field(
+        ...,
+        description="Quantity ordered (must be greater than 0)"
+    )
+    reasoning: Optional[str] = Field(
+        None,
+        description="AI reasoning for how this item was identified and extracted"
+    )
+
+
 class ExtractedOrder(BaseModel):
     """Complete order extracted from document."""
     customer_name: str = Field(
@@ -54,9 +83,17 @@ class ExtractedOrder(BaseModel):
         None,
         description="Customer address"
     )
+    order_number: Optional[str] = Field(
+        None,
+        description="Order number from the document"
+    )
     order_date: Optional[str] = Field(
         None,
         description="Order date in ISO format (YYYY-MM-DD)"
+    )
+    delivery_date: Optional[str] = Field(
+        None,
+        description="Requested delivery date in ISO format (YYYY-MM-DD)"
     )
     payment_terms_requested: Optional[str] = Field(
         None,
@@ -69,6 +106,38 @@ class ExtractedOrder(BaseModel):
     items: list[ExtractedItem] = Field(
         ...,
         description="List of line items (at least one required)"
+    )
+
+
+class LubeExtractedOrder(BaseModel):
+    """Complete Lube order extracted from document."""
+    customer_name: str = Field(
+        ...,
+        description="Customer company name"
+    )
+    order_number: Optional[str] = Field(
+        None,
+        description="Order number from the document"
+    )
+    order_date: Optional[str] = Field(
+        None,
+        description="Order date in ISO format (YYYY-MM-DD)"
+    )
+    delivery_date: Optional[str] = Field(
+        None,
+        description="Requested delivery date in ISO format (YYYY-MM-DD)"
+    )
+    notes: Optional[str] = Field(
+        None,
+        description="General order notes or special instructions"
+    )
+    extraction_reasoning: Optional[str] = Field(
+        None,
+        description="Overall reasoning about how the document was interpreted"
+    )
+    items: list[LubeExtractedItem] = Field(
+        ...,
+        description="List of Lube line items (at least one required)"
     )
 
 
@@ -106,9 +175,17 @@ class ProcessOrderResponse(BaseModel):
         ...,
         description="Overall confidence indicator (green/yellow/red)"
     )
+    traffic_light_explanation: str = Field(
+        ...,
+        description="AI-generated explanation of what's missing or needs attention"
+    )
     execution_log: list[str] = Field(
         ...,
         description="Step-by-step processing log with explanations"
+    )
+    ai_reasoning: Optional[dict] = Field(
+        None,
+        description="AI model's reasoning and thought process during extraction"
     )
 
 

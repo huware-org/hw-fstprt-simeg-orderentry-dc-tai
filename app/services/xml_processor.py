@@ -3,6 +3,7 @@
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional
 from app.utils.scavolini_loader import get_scavolini_loader
+from app.utils.lube_loader import get_lube_loader
 from app.models.schemas import ExtractedOrder, ExtractedItem
 from app.config.settings import settings
 from google import genai
@@ -290,4 +291,29 @@ def lookup_scavolini_mago4_code(
         fin_piano=fin_piano,
         prof_piano=prof_piano,
         cod_art_cliente=cod_art_int
+    )
+
+
+def lookup_lube_mago4_code(
+    codice_base: str,
+    caratteristica: str
+) -> Optional[str]:
+    """
+    Lookup Mago4 code from Lube transcodification table.
+    
+    The Lube table has a 'Caratteristica' column with format "PREFIX=CODE" (e.g., "TKS=KS06").
+    The loader automatically splits this and matches against just the CODE part.
+    
+    Args:
+        codice_base: Base product code from Lube
+        caratteristica: Characteristic code (just the CODE part, e.g., "KS06")
+        
+    Returns:
+        Mago4 code if found, None otherwise
+    """
+    loader = get_lube_loader()
+    
+    return loader.lookup_mago4_code(
+        codice_base=codice_base,
+        caratteristica=caratteristica
     )
