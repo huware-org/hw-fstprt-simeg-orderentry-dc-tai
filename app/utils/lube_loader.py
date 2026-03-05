@@ -9,7 +9,7 @@ from app.config.settings import logger
 class LubeTranscodificationLoader:
     """Loads and queries the Lube transcodification table."""
     
-    def __init__(self, xlsx_path: str = "docs/transcoding/Tabella transcodifica Lube 13.02.26 (1).xlsx"):
+    def __init__(self, xlsx_path: str = "transcoding/Tabella transcodifica Lube 13.02.26 (1).xlsx"):
         """
         Initialize the loader.
         
